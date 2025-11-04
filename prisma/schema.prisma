@@ -1,0 +1,172 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+
+// -----------------------------------------------------------------
+// ENUMS (Used to define a set of allowed values for a field)
+// -----------------------------------------------------------------
+
+/// Defines the roles a user can have
+enum Role {
+  USER
+  ADMIN
+}
+
+/// Defines what kind of product is being sold
+enum ProductType {
+  VPS
+  GAME_SERVER
+  WEB_HOSTING
+}
+
+/// Defines how often a user is billed
+enum BillingCycle {
+  MONTHLY
+  QUARTERLY
+  ANNUALLY
+}
+
+/// Defines the current state of an order
+enum OrderStatus {
+  PENDING   // Payment not yet received
+  ACTIVE    // Actively paid and running
+  SUSPENDED // Failed payment
+  CANCELLED // User or admin cancelled
+}
+
+/// Defines the current state of a provisioned service
+enum ServiceStatus {
+  PENDING   // Order paid, waiting for creation
+  BUILDING  // Proxmox/OVH APIs are working
+  RUNNING
+  STOPPED
+  SUSPENDED
+  DELETING
+}
+
+/// Defines the current state of an IP address in your pool
+enum IpStatus {
+  AVAILABLE // Ready to be assigned
+  RESERVED  // Locked by an order, but not yet assigned
+  IN_USE    // Assigned to a running service
+}
+
+// -----------------------------------------------------------------
+// MODELS (Your database tables)
+// -----------------------------------------------------------------
+
+/// The User model for authentication and customer information.
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  username     String   @unique
+  firstName    String?
+  lastName     String?
+  password     String /// This should be a HASHED password
+  role         Role     @default(USER)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  /// Billing Address fields
+  addressLine1 String?
+  addressLine2 String?
+  city         String?
+  postCode     String?
+  country      String?
+
+  /// Relations
+  orders   Order[] /// A user can have many orders
+  services Service[] /// A user can have many services
+}
+
+/// Your "store catalog". This is what you sell.
+model Product {
+  id           String       @id @default(uuid())
+  name         String       // e.g., "VPS Starter", "Minecraft - 4GB"
+  type         ProductType  // e.g., VPS, GAME_SERVER
+  price        Decimal      // The cost
+  billingCycle BillingCycle // e.g., MONTHLY
+
+  /// Flexible specs for different product types.
+  /// For a VPS: { "vcpus": 2, "ramGB": 4, "storageGB": 50, "location": "France" }
+  /// For a Game Server: { "ramGB": 4, "playerSlots": 50, "location": "Warsaw" }
+  specs Json
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /// Relations
+  orders Order[] /// This product can be in many orders
+}
+
+/// The "contract" or "subscription" that links a User to a Product.
+model Order {
+  id          String      @id @default(uuid())
+  totalAmount Decimal     // The price the user paid at checkout
+  status      OrderStatus @default(PENDING)
+  createdAt   DateTime    @default(now())
+  paidUntil   DateTime?   // When the subscription expires
+
+  /// Relations
+  user   User   @relation(fields: [userId], references: [id])
+  userId String
+
+  product   Product @relation(fields: [productId], references: [id])
+  productId String
+
+  service Service? /// The service this order provisioned (1-to-1)
+}
+
+/// The *actual* running instance (e.g., the Proxmox VM).
+/// This is what the user sees in their "My Services" dashboard.
+model Service {
+  id        String        @id @default(uuid())
+  hostname  String        // The custom name the user gave the server
+  status    ServiceStatus @default(PENDING)
+  os        String        // e.g., "Ubuntu 22.04"
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+
+  /// Proxmox-specific Info
+  vmid Int @unique // The Proxmox VM ID
+  node String // The Proxmox node (e.g., "ks-6-pve")
+
+  /// Relations
+  user   User   @relation(fields: [userId], references: [id])
+  userId String // For easy querying ("get all services for this user")
+
+  order   Order  @relation(fields: [orderId], references: [id])
+  orderId String @unique // The order that created this service
+
+  ipAddress   IpAddress @relation(fields: [ipAddressId], references: [id])
+  ipAddressId Int       @unique // The unique failover IP for this service
+}
+
+/// This is your IP Address Management (IPAM) table.
+/// You will manually fill this table with the IPs you buy from OVH.
+model IpAddress {
+  id         Int      @id @default(autoincrement())
+  ipAddress  String   @unique
+  gateway    String // Your server's gateway (e.g., "123.45.67.254")
+  location   String // e.g., "France", "Warsaw"
+  status     IpStatus @default(AVAILABLE)
+
+  /// OVH-specific Info
+  virtualMac String? @unique
+
+  /// Relations
+  service Service? /// The service this IP is currently assigned to
+}
