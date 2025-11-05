@@ -7,5 +7,6 @@ const router = Router();
 // Mount all your different API routes
 router.use('/vps', vpsRoutes);
 router.use('/auth', authRoutes); // <-- Use new routes
+router.use('/products', productRoutes); // <-- Use new routes
 
 export default router;
