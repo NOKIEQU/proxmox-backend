@@ -99,7 +99,9 @@ model Product {
   type         ProductType  // e.g., VPS, GAME_SERVER
   price        Decimal      // The cost
   billingCycle BillingCycle // e.g., MONTHLY
-
+  description  String       // A short description shown on the product page
+  stock       Int          // The number of items in stock (-1 means unlimited)
+  
   /// Flexible specs for different product types.
   /// For a VPS: { "vcpus": 2, "ramGB": 4, "storageGB": 50, "location": "France" }
   /// For a Game Server: { "ramGB": 4, "playerSlots": 50, "location": "Warsaw" }
