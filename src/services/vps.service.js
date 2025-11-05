@@ -1,3 +1,7 @@
+import prisma from './prisma.service.js';
+import proxmox from './proxmox.service.js';
+import ovhClient from './ovh.service.js';
+
 /**
  * Orchestrates the entire VPS provisioning process.
  * This is the core "robot" of your application.
@@ -182,5 +186,68 @@ export const provisionNewVps = async ({
     
     // Throw a user-friendly error
     throw new Error('Failed to provision VPS. Please try again later or contact support.');
+  }
+};
+
+/**
+ * --- NEW HELPER FUNCTION ---
+ * Securely finds a VPS *only* if it's owned by the user.
+ * @param {string} vmid - The VMID of the service
+ * @param {string} userId - The ID of the user making the request
+ */
+const getOwnedVps = async (vmid, userId) => {
+  const service = await prisma.service.findFirst({
+    where: {
+      vmid: parseInt(vmid, 10),
+      userId: userId,
+    },
+  });
+
+  if (!service) {
+    throw new Error('VPS not found or you do not have permission to control it.');
+  }
+  return service;
+};
+
+/**
+ * --- NEW FUNCTION ---
+ * Securely sends a power command (start, stop, reboot) to a VM.
+ * @param {string} vmid - The VMID to control
+ * @param {string} userId - The user making the request
+ * @param {'start' | 'stop' | 'reboot'} action - The power action
+ */
+export const controlVm = async (vmid, userId, action) => {
+  // 1. Authorize: Check if the user owns this VM
+  const service = await getOwnedVps(vmid, userId);
+
+  // 2. Validate Action
+  const validActions = ['start', 'stop', 'reboot'];
+  if (!validActions.includes(action)) {
+    throw new Error('Invalid action specified.');
+  }
+
+  // 3. Get Node and execute command
+  const { node } = service;
+  try {
+    const result = await proxmox.post(
+      `/nodes/${node}/qemu/${vmid}/status/${action}`
+    );
+    
+    // 4. Update status in our database (optimistic update)
+    let newStatus = service.status;
+    if (action === 'start') newStatus = 'RUNNING';
+    if (action === 'stop') newStatus = 'STOPPED';
+
+    if (newStatus !== service.status) {
+      await prisma.service.update({
+        where: { id: service.id },
+        data: { status: newStatus },
+      });
+    }
+
+    return { proxmoxResponse: result.data };
+  } catch (error) {
+    console.error(`Failed to ${action} VM ${vmid}:`, error.message);
+    throw new Error(`Failed to ${action} VM.`);
   }
 };
