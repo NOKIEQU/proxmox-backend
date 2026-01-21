@@ -2,42 +2,106 @@ import prisma from './prisma.service.js';
 import proxmox from './proxmox.service.js';
 import ovhClient from './ovh.service.js';
 
+// --- Configuration ---
+const NODE_NAME = 'ns3191007'; // Your Proxmox node name
+const BRIDGE_NAME = 'vmbr0';   // Your public bridge
+const DEFAULT_USER = 'ubuntu'; // Default CI User (fallback)
+
 /**
- * Orchestrates the entire VPS provisioning process.
- * This is the core "robot" of your application.
- *
- * @param {object} options
- * @param {string} options.userId - The ID of the user ordering the VPS.
- * @param {string} options.productId - The ID of the product being ordered.
- * @param {string} options.hostname - The user-chosen hostname.
- * @param {string} options.sshKey - The user's public SSH key.
- * @param {string} options.userPassword - A password for the user.
- * @returns {Promise<object>} The newly created service record from the database.
+ * Creates the initial database entry for a service immediately after payment.
+ * This reserves the "slot" in the database while the background worker builds the VM.
+ * 
+ * @param {object} params
+ * @param {string} params.userId
+ * @param {string} params.productId
+ * @param {string} params.hostname
+ * @param {string} params.osVersionId - ID of the selected OS Version
+ * @param {string} params.stripeSubscriptionId
+ * @param {number} params.amount
+ * @returns {Promise<object>} The newly created service record.
  */
-export const provisionNewVps = async ({
+export const createServiceEntry = async ({
   userId,
   productId,
   hostname,
-  sshKey,
-  userPassword, // We'll generate a random password for the 'ubuntu' user
+  osVersionId, 
+  stripeSubscriptionId,
+  amount
 }) => {
+  // 1. Get Product Details
+  const product = await prisma.product.findUnique({
+    where: { id: productId },
+  });
+  if (!product) throw new Error('Product not found');
+
+  // Verify OS Exists (Double check)
+  const osVersion = await prisma.osVersion.findUnique({
+      where: { id: osVersionId }
+  });
+  // Fallback to error or default if missing? Better to error.
+  if(!osVersion) throw new Error("CRITICAL: Invalid OS Version in webhook payload.");
+
+  // 2. Create Order
+  const order = await prisma.order.create({
+    data: {
+      totalAmount: amount,
+      status: 'ACTIVE',
+      userId: userId,
+      productId: productId,
+      paidUntil: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days
+      stripeSubscriptionId: stripeSubscriptionId // Store the ID
+    },
+  });
+
+  // 3. Create Service 
+  const service = await prisma.service.create({
+    data: {
+      hostname: hostname,
+      status: 'BUILDING', 
+      osVersionId: osVersion.id, // Link to DB
+      userId: userId,
+      orderId: order.id,
+    },
+  });
+
+  return service;
+};
+
+/**
+ * Orchestrates the VPS provisioning process for an EXISTING service entry.
+ * Should be called in the background.
+ *
+ * @param {string} serviceId - The ID of the service to provision.
+ * @param {object} secrets - Sensitive data not stored in DB.
+ * @param {string} secrets.sshKey
+ * @param {string} secrets.userPassword
+ */
+export const provisionNewVps = async (serviceId, { sshKey, userPassword }) => {
   let ipRecord, vmac, vmid;
 
-  // --- Hardcoded values (you should get these from the product) ---
-  const TEMPLATE_ID = 9000; // The ID of your master template
-  const NODE_NAME = 'ns3191007'; // Your Proxmox node name (from your screenshot)
-  const BRIDGE_NAME = 'vmbr0'; // Your public bridge
-  const DEFAULT_USER = 'ubuntu';
-
   try {
-    // --- Step 1: Get Product & User Info ---
-    console.log(`Starting provisioning for user ${userId} with product ${productId}`);
-    const product = await prisma.product.findUnique({
-      where: { id: productId },
-    });
-    if (!product) throw new Error('Product not found');
+    // --- Step 1: Get Service & Product Info ---
+    console.log(`Starting provisioning for service ${serviceId}`);
     
-    // Get product specs. We must use a type assertion
+    const service = await prisma.service.findUnique({
+        where: { id: serviceId },
+        include: { 
+            order: { include: { product: true } },
+            osVersion: true // Include the OS details!
+        }
+    });
+
+    if (!service) throw new Error('Service not found');
+    const product = service.order.product;
+    const { hostname, userId, osVersion } = service; 
+
+    // Determine Template ID based on OS from DB
+    if (!osVersion) throw new Error("Service has no associated OS Version!");
+    
+    const templateId = osVersion.proxmoxTemplateId;
+    const ciUser = osVersion.cloudInitUser || DEFAULT_USER;
+
+    // Get product specs. 
     /** @type {{ vcpus: number, ramGB: number, storageGB: number, location: string }} */
     const specs = product.specs;
 
@@ -58,18 +122,17 @@ export const provisionNewVps = async ({
     console.log(`Reserved IP: ${ipRecord.ipAddress}`);
 
     // --- Step 3: Call OVH API to Create vMAC ---
-    // We must URL-encode the IP block (e.g., "1.2.3.4/29" -> "1.2.3.4%2F29")
     const encodedIpBlock = encodeURIComponent(ipRecord.ipBlock);
     
     console.log(`Calling OVH API to create vMAC for IP block ${ipRecord.ipBlock}...`);
     
     const vmacResponse = await ovhClient.request('POST', `/ip/${encodedIpBlock}/virtualMac`, {
-      ipAddress: ipRecord.ipAddress, // The specific IP to attach
-      type: 'ovh',                   // The type for Proxmox/KVM
+      ipAddress: ipRecord.ipAddress, 
+      type: 'ovh',                   
       vmName: hostname,
     });
     
-    vmac = vmacResponse.macAddress; // e.g., '00:50:56:xx:xx:xx'
+    vmac = vmacResponse.macAddress; 
     console.log(`Successfully created vMAC ${vmac} for ${ipRecord.ipAddress}`);
 
     // --- Step 4: Call Proxmox API to Create VM ---
@@ -79,34 +142,34 @@ export const provisionNewVps = async ({
     console.log(`Next available VMID is ${vmid}`);
     
     // 4a. Clone the template
-    console.log(`Cloning template ${TEMPLATE_ID} to new VM ${vmid}...`);
-    await proxmox.post(`/nodes/${NODE_NAME}/qemu/${TEMPLATE_ID}/clone`, {
+    console.log(`Cloning template ${templateId} to new VM ${vmid}...`);
+    await proxmox.post(`/nodes/${NODE_NAME}/qemu/${templateId}/clone`, {
       newid: vmid,
       name: hostname,
-      full: true, // We must do a full clone
+      full: true,
     });
 
-    // 4b. Configure the VM's hardware (vMAC, CPU, RAM)
+    // 4b. Configure the VM's hardware 
     console.log(`Configuring VM ${vmid} hardware...`);
     await proxmox.post(`/nodes/${NODE_NAME}/qemu/${vmid}/config`, {
       cores: specs.vcpus,
-      memory: specs.ramGB * 1024, // Proxmox wants RAM in MiB
-      net0: `virtio=${vmac},bridge=${BRIDGE_NAME}`, // Set the vMAC
+      memory: specs.ramGB * 1024, 
+      net0: `virtio=${vmac},bridge=${BRIDGE_NAME}`, 
     });
     
     // 4c. Resize the disk
     console.log(`Resizing disk to ${specs.storageGB}G...`);
     await proxmox.put(`/nodes/${NODE_NAME}/qemu/${vmid}/resize`, {
-      disk: 'scsi0', // The disk from our template
+      disk: 'scsi0', 
       size: `${specs.storageGB}G`,
     });
 
-    // 4d. Configure Cloud-Init (IP, user, ssh key)
+    // 4d. Configure Cloud-Init 
     console.log(`Setting Cloud-Init config for VM ${vmid}...`);
     await proxmox.post(`/nodes/${NODE_NAME}/qemu/${vmid}/config`, {
-      ciuser: DEFAULT_USER,
-      cipassword: userPassword, // Pass in the password
-      sshkeys: sshKey,         // Pass in the SSH key
+      ciuser: ciUser,
+      cipassword: userPassword, 
+      sshkeys: sshKey,         
       ipconfig0: `ip=${ipRecord.ipAddress}/32,gw=${ipRecord.gateway}`,
     });
 
@@ -114,41 +177,27 @@ export const provisionNewVps = async ({
     console.log(`Starting VM ${vmid}...`);
     await proxmox.post(`/nodes/${NODE_NAME}/qemu/${vmid}/status/start`);
 
-    // --- Step 5: Create Order and Service in Database ---
-    console.log(`Finalizing database records for user ${userId}...`);
+    // --- Step 5: Update Service and IP in Database ---
+    console.log(`Finalizing database records for service ${service.id}...`);
     
-    // Create the Order
-    const order = await prisma.order.create({
+    // Update Service
+    await prisma.service.update({
+      where: { id: service.id },
       data: {
-        totalAmount: product.price,
-        status: 'ACTIVE',
-        userId: userId,
-        productId: productId,
-        paidUntil: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days
-      },
-    });
-
-    // Create the Service and link it to the Order and IP
-    const service = await prisma.service.create({
-      data: {
-        hostname: hostname,
         status: 'RUNNING',
-        os: 'Ubuntu 22.04', // You can get this from the Product model later
-        vmid: vmid,
+        vmid: parseInt(vmid),
         node: NODE_NAME,
-        userId: userId,
-        orderId: order.id,
-        ipAddressId: ipRecord.id,
+        ipAddressId: ipRecord.id, // Link the IP
       },
     });
     
-    // --- Step 6: Finalize IP Address Record ---
+    // Update IP Address Record
     await prisma.ipAddress.update({
       where: { id: ipRecord.id },
       data: {
         status: 'IN_USE',
         virtualMac: vmac,
-        vmid: vmid,
+        vmid: parseInt(vmid),
       },
     });
 
@@ -159,38 +208,53 @@ export const provisionNewVps = async ({
     // --- CRITICAL: Rollback Logic ---
     console.error(`Provisioning failed: ${error.message}`);
     
+    // Mark service as stopped/failed so admin knows
+    await prisma.service.update({
+        where: { id: serviceId },
+        data: { status: 'STOPPED' } // Use STOPPED as a proxy for FAILED
+    });
+
     // If the VM was created, destroy it
     if (vmid) {
       console.log(`Rollback: Destroying Proxmox VM ${vmid}...`);
-      await proxmox.post(`/nodes/${NODE_NAME}/qemu/${vmid}/status/stop`);
-      // Wait a moment for it to stop
-      await new Promise(resolve => setTimeout(resolve, 3000)); 
-      await proxmox.delete(`/nodes/${NODE_NAME}/qemu/${vmid}`);
+      try {
+        await proxmox.post(`/nodes/${NODE_NAME}/qemu/${vmid}/status/stop`);
+        await new Promise(resolve => setTimeout(resolve, 3000)); 
+        await proxmox.delete(`/nodes/${NODE_NAME}/qemu/${vmid}`);
+      } catch (e) {
+          console.error("Failed to destroy VM during rollback", e);
+      }
     }
     
     // If the vMAC was created, delete it
     if (vmac && ipRecord) {
       console.log(`Rollback: Deleting OVH vMAC ${vmac}...`);
-      const encodedIpBlock = encodeURIComponent(ipRecord.ipBlock);
-      await ovhClient.request('DELETE', `/ip/${encodedIpBlock}/virtualMac/${vmac}`);
+      try {
+        const encodedIpBlock = encodeURIComponent(ipRecord.ipBlock);
+        await ovhClient.request('DELETE', `/ip/${encodedIpBlock}/virtualMac/${vmac}`);
+      } catch (e) {
+          console.error("Failed to delete vMAC during rollback", e);
+      }
     }
 
     // If the IP was reserved, release it
     if (ipRecord) {
       console.log(`Rollback: Releasing IP ${ipRecord.ipAddress}...`);
-      await prisma.ipAddress.update({
-        where: { id: ipRecord.id },
-        data: { status: 'AVAILABLE', vmid: null, virtualMac: null },
-      });
+      try {
+        await prisma.ipAddress.update({
+            where: { id: ipRecord.id },
+            data: { status: 'AVAILABLE', vmid: null, virtualMac: null },
+        });
+      } catch (e) {
+          console.error("Failed to release IP during rollback", e);
+      }
     }
     
-    // Throw a user-friendly error
-    throw new Error('Failed to provision VPS. Please try again later or contact support.');
+    throw new Error('Failed to provision VPS.');
   }
 };
 
 /**
- * --- NEW HELPER FUNCTION ---
  * Securely finds a VPS *only* if it's owned by the user.
  * @param {string} vmid - The VMID of the service
  * @param {string} userId - The ID of the user making the request
@@ -210,7 +274,6 @@ const getOwnedVps = async (vmid, userId) => {
 };
 
 /**
- * --- NEW FUNCTION ---
  * Securely sends a power command (start, stop, reboot) to a VM.
  * @param {string} vmid - The VMID to control
  * @param {string} userId - The user making the request

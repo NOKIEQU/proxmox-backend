@@ -14,6 +14,7 @@ const proxmox = proxmoxApi({
   port: 8006,
   user: config.pveTokenId,    // e.g., 'backend@pve'
   token: config.pveTokenSecret, // The secret key
+  password: 'sdsdsdsdsds',               // Not needed when using token auth
   "rejectUnauthorized": false // Set to true in production with a valid cert
 });
 
