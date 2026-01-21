@@ -87,6 +87,9 @@ model User {
   postCode     String?
   country      String?
 
+  /// Stripe Info
+  stripeCustomerId String? @unique
+
   /// Relations
   orders   Order[] /// A user can have many orders
   services Service[] /// A user can have many services
@@ -97,11 +100,9 @@ model Product {
   id           String       @id @default(uuid())
   name         String       // e.g., "VPS Starter", "Minecraft - 4GB"
   type         ProductType  // e.g., VPS, GAME_SERVER
-  price        Decimal      // The cost
-  billingCycle BillingCycle // e.g., MONTHLY
   description  String       // A short description shown on the product page
   stock       Int          // The number of items in stock (-1 means unlimited)
-  
+
   /// Flexible specs for different product types.
   /// For a VPS: { "vcpus": 2, "ramGB": 4, "storageGB": 50, "location": "France" }
   /// For a Game Server: { "ramGB": 4, "playerSlots": 50, "location": "Warsaw" }
@@ -112,12 +113,28 @@ model Product {
 
   /// Relations
   orders Order[] /// This product can be in many orders
+  prices ProductPrice[]
+}
+
+model ProductPrice {
+  id           String       @id @default(uuid())
+  billingCycle BillingCycle // MONTHLY, QUARTERLY, ANNUALLY
+  price        Decimal
+  stripePriceId String?
+
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  productId String
 }
 
 /// The "contract" or "subscription" that links a User to a Product.
 model Order {
   id          String      @id @default(uuid())
   totalAmount Decimal     // The price the user paid at checkout
+  
+  billingCycle BillingCycle @default(MONTHLY) // Store what cycle was chosen
+  
+  /// Stripe Subscription Info
+  stripeSubscriptionId String? @unique
   status      OrderStatus @default(PENDING)
   createdAt   DateTime    @default(now())
   paidUntil   DateTime?   // When the subscription expires
@@ -138,13 +155,17 @@ model Service {
   id        String        @id @default(uuid())
   hostname  String        // The custom name the user gave the server
   status    ServiceStatus @default(PENDING)
-  os        String        // e.g., "Ubuntu 22.04"
+  
+  // Link to the specific OS Version used
+  osVersion   OsVersion? @relation(fields: [osVersionId], references: [id])
+  osVersionId String?
+
   createdAt DateTime      @default(now())
   updatedAt DateTime      @updatedAt
 
   /// Proxmox-specific Info
-  vmid Int @unique // The Proxmox VM ID
-  node String // The Proxmox node (e.g., "ks-6-pve")
+  vmid Int? @unique // The Proxmox VM ID
+  node String? // The Proxmox node (e.g., "ks-6-pve")
 
   /// Relations
   user   User   @relation(fields: [userId], references: [id])
@@ -153,8 +174,8 @@ model Service {
   order   Order  @relation(fields: [orderId], references: [id])
   orderId String @unique // The order that created this service
 
-  ipAddress   IpAddress @relation(fields: [ipAddressId], references: [id])
-  ipAddressId Int       @unique // The unique failover IP for this service
+  ipAddress   IpAddress? @relation(fields: [ipAddressId], references: [id])
+  ipAddressId Int?       @unique // The unique failover IP for this service
 }
 
 /// This is your IP Address Management (IPAM) table.
@@ -171,4 +192,31 @@ model IpAddress {
 
   /// Relations
   service Service? /// The service this IP is currently assigned to
+}
+
+// -----------------------------------------------------------------
+// OS MANAGEMENT
+// -----------------------------------------------------------------
+
+model OperatingSystem {
+  id        String      @id @default(uuid())
+  name      String      // e.g., "Ubuntu", "Debian", "CentOS"
+  imageUrl  String?     // URL to an icon/logo
+  type      String      @default("linux") // "linux" or "windows"
+  
+  versions  OsVersion[]
+}
+
+model OsVersion {
+  id                String @id @default(uuid())
+  version           String // e.g., "22.04 LTS", "12 (Bookworm)"
+  
+  /// Proxmox Configuration
+  proxmoxTemplateId Int    // The VM ID of the template on Proxmox (e.g. 9000)
+  cloudInitUser     String @default("ubuntu") // The default user for this image
+
+  os   OperatingSystem @relation(fields: [osId], references: [id])
+  osId String
+
+  services Service[] // Track which services use this version
 }

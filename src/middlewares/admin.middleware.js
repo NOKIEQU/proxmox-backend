@@ -10,6 +10,8 @@ export const isAdmin = (req, res, next) => {
     next();
   } else {
     // User is logged in but not an admin
+    console.log(req.user);
     return res.status(403).json({ message: 'Not authorized as an admin' });
+    
   }
 };
