@@ -1,21 +1,85 @@
-import { provisionNewVps } from '../services/vps.service.js';
+import prisma from '../services/prisma.service.js';
 
-export const createVps = async (req, res, next) => {
+/**
+ * Get current user profile
+ */
+export const getMe = async (req, res, next) => {
   try {
-    // 1. Get data from the user
-    const { plan, os, sshKey } = req.body;
-    // const userId = req.user.id; // from auth middleware
+    const userId = req.user.id;
+    
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        email: true,
+        username: true,
+        firstName: true,
+        lastName: true,
+        role: true,
+        addressLine1: true,
+        addressLine2: true,
+        city: true,
+        postCode: true,
+        country: true,
+        stripeCustomerId: true,
+        createdAt: true,
+      }
+    });
 
-    // 2. Call the service to do the work
-    const newVps = await provisionNewVps({ plan, os, sshKey });
+    if (!user) {
+        return res.status(404).json({ message: 'User not found' });
+    }
 
-    // 3. Send the response
-    res.status(201).json({ message: "VPS creation in progress!", vps: newVps });
+    res.json(user);
   } catch (error) {
-    next(error); // Pass the error to your error handler
+    next(error);
   }
 };
 
-export const stopVps = async (req, res, next) => {
-  // ... similar logic ...
+/**
+ * Update current user profile
+ */
+export const updateUser = async (req, res, next) => {
+  try {
+    const userId = req.user.id;
+    const { 
+        firstName, 
+        lastName, 
+        addressLine1, 
+        addressLine2, 
+        city, 
+        postCode, 
+        country
+    } = req.body;
+
+    const updatedUser = await prisma.user.update({
+      where: { id: userId },
+      data: {
+        firstName,
+        lastName,
+        addressLine1,
+        addressLine2,
+        city,
+        postCode,
+        country
+      },
+      select: {
+          id: true,
+          email: true,
+          username: true,
+          firstName: true,
+          lastName: true,
+          role: true,
+          addressLine1: true,
+          addressLine2: true,
+          city: true,
+          postCode: true,
+          country: true,
+      }
+    });
+
+    res.json(updatedUser);
+  } catch (error) {
+    next(error);
+  }
 };

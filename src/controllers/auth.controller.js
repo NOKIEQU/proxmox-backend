@@ -7,7 +7,17 @@ import { generateToken } from '../services/token.service.js';
  */
 export const register = async (req, res, next) => {
   try {
-    const { email, username, password, firstName, lastName } = req.body;
+    const { 
+        email, 
+        username, 
+        password, 
+        firstName, 
+        lastName, 
+        addressLine1, 
+        city, 
+        postCode, 
+        country // <--- Added fields from frontend
+    } = req.body;
 
     // 1. Check if user already exists
     const existingUser = await prisma.user.findFirst({
@@ -29,7 +39,10 @@ export const register = async (req, res, next) => {
         password: hashedPassword,
         firstName,
         lastName,
-        // All other fields (address etc.) are optional
+        addressLine1,
+        city,
+        postCode,
+        country
       },
     });
 
