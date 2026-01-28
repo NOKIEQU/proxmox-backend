@@ -154,6 +154,7 @@ model Order {
 model Service {
   id        String        @id @default(uuid())
   hostname  String        // The custom name the user gave the server
+  location  String        // e.g., "UK (London)", "Poland"
   status    ServiceStatus @default(PENDING)
   
   // Link to the specific OS Version used
