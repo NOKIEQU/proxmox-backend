@@ -255,6 +255,27 @@ export const provisionNewVps = async (serviceId, { sshKey, userPassword }) => {
 };
 
 /**
+ * Returns all VPS services owned by a user, including product and IP details.
+ * @param {string} userId
+ */
+export const findUserServices = async (userId) => {
+  return prisma.service.findMany({
+    where: { userId },
+    include: {
+      ipAddress: true,
+      order: {
+        include: {
+          product: true,
+        },
+      },
+    },
+    orderBy: {
+      createdAt: 'desc',
+    },
+  });
+};
+
+/**
  * Securely finds a VPS *only* if it's owned by the user.
  * @param {string} vmid - The VMID of the service
  * @param {string} userId - The ID of the user making the request

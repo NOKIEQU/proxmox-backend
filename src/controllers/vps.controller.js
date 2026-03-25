@@ -16,7 +16,7 @@ export const getMyServices = async (req, res, next) => {
       hostname: service.hostname,
       status: service.status,
       vmid: service.vmid,
-      ip: service.ipAddress.ipAddress,
+      ip: service.ipAddress?.ipAddress ?? null,
       planName: service.order.product.name,
       specs: service.order.product.specs,
       createdAt: service.createdAt,
