@@ -4,7 +4,7 @@ import prisma from './prisma.service.js';
  * Get all available products
  * This is a public service
  */
-export const getAllProducts = async () => {
+export const  getAllProducts = async () => {
   return prisma.product.findMany({
     where: {
       // Only show products that are not out of stock
@@ -13,6 +13,11 @@ export const getAllProducts = async () => {
         { stock: -1 },
         { stock: { gt: 0 } },
       ],
+    },
+    include: {
+      prices: {
+        orderBy: { billingCycle: 'asc' },
+      },
     },
   });
 };
@@ -24,6 +29,11 @@ export const getAllProducts = async () => {
 export const getProductById = async (id) => {
   const product = await prisma.product.findUnique({
     where: { id },
+    include: {
+      prices: {
+        orderBy: { billingCycle: 'asc' },
+      },
+    },
   });
 
   if (!product) {
