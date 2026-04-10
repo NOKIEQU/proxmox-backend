@@ -4,6 +4,7 @@ import authRoutes from './auth.routes.js';
 import productRoutes from './product.routes.js';
 import osRoutes from './os.routes.js';
 import userRoutes from './user.routes.js';
+import locationRoutes from './location.routes.js';
 
 const router = Router();
 
@@ -13,5 +14,6 @@ router.use('/auth', authRoutes);
 router.use('/products', productRoutes); 
 router.use('/os', osRoutes);
 router.use('/users', userRoutes);
+router.use('/locations', locationRoutes);
 
 export default router;

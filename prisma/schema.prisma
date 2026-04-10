@@ -221,3 +221,16 @@ model OsVersion {
 
   services Service[] // Track which services use this version
 }
+
+model Location {
+  id        String      @id @default(uuid())
+  name      String      // e.g., "London", "New York"
+  country   String      // e.g., "United Kingdom", "United States"
+  isoCode   String      // e.g., "GB", "US" (CRITICAL for the flag library)
+  region    String      // e.g., "Europe", "North America"
+  isActive  Boolean     @default(true) // So you can hide maintenance locations
+
+  // Update existing models to link to this (Optional but recommended for strict relations)
+  // services  Service[]
+  // ips       IpAddress[]
+}
