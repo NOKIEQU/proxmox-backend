@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import prisma from '../services/prisma.service.js';
 import { isAdmin } from '../middlewares/admin.middleware.js'; // Ensure you have this
+import * as osController from '../controllers/os.controller.js';
 
 const router = Router();
 
@@ -10,20 +11,11 @@ import { isLoggedIn } from '../middlewares/auth.middleware.js';
 
 /**
  * @route GET /api/os
- * @desc  Get all available Operating Systems and their versions
+ * @desc  Fetch all available operating systems and versions
+ * @access Public (No auth required to see what you sell)
  */
-router.get('/', async (req, res) => {
-  try {
-    const osList = await prisma.operatingSystem.findMany({
-      include: {
-        versions: true // Include nested versions
-      }
-    });
-    res.json(osList);
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to fetch OS list' });
-  }
-});
+
+router.get('/', osController.getAllOS);
 
 // --- ADMIN ROUTES (Protected) ---
 
