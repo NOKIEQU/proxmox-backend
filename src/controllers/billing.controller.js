@@ -9,7 +9,7 @@ import * as vpsService from '../services/vps.service.js';
  */
 export const createSubscription = async (req, res, next) => {
   try {
-    const { productId, hostname, sshKey, userPassword, osVersionId, billingCycle } = req.body;
+    const { productId, hostname, sshKey, userPassword, osVersionId, billingCycle, locationId } = req.body;
     const userId = req.user.id; // From your auth middleware
 
     if (!['MONTHLY', 'QUARTERLY', 'ANNUALLY'].includes(billingCycle)) {
@@ -49,6 +49,28 @@ export const createSubscription = async (req, res, next) => {
     // Calculate total price (Base Price + OS Premium)
     const finalAmount = Math.round((Number(initPrice.price) + Number(osVersion.premium || 0)) * 100);
 
+    const locationRecord = await prisma.location.findUnique({
+      where: { id: locationId }
+    });
+
+    if (!locationRecord) {
+      return res.status(400).json({ message: 'Invalid location selected.' });
+    }
+
+    // Check if there is at least one AVAILABLE IP for this specific location
+    const availableIp = await prisma.ipAddress.findFirst({
+      where: {
+        status: 'AVAILABLE',
+        location: locationRecord.name
+      }
+    });
+
+    if (!availableIp) {
+      return res.status(400).json({ 
+        message: `We are currently out of capacity in ${locationRecord.name}. Please select a different location.` 
+      });
+    }
+
     // 4. Get or Create Customer
     const user = await prisma.user.findUnique({ where: { id: userId } });
     let customerId = user.stripeCustomerId;
@@ -82,7 +104,7 @@ export const createSubscription = async (req, res, next) => {
       customer: customerId,
       items: [{
         price_data: {
-          currency: 'usd',
+          currency: 'gbp',
           product: stripeProduct.id, // <-- We use the newly created Product ID here!
           unit_amount: finalAmount,
           recurring: {
@@ -102,7 +124,8 @@ export const createSubscription = async (req, res, next) => {
         osVersionId: osVersionId.toString(),
         sshKey: sshKey || 'none',
         userPassword,
-        billingCycle
+        billingCycle,
+        location: locationId.toString(),
       },
     });
 
@@ -119,58 +142,168 @@ export const createSubscription = async (req, res, next) => {
 /**
  * Returns all active subscriptions for the current user.
  */
-export const getMySubscriptions = async (req, res, next) => { /* ... Keep existing logic ... */ };
+export const getMySubscriptions = async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    // Fetch orders and include the related product and service details
+    const orders = await prisma.order.findMany({
+      where: { userId },
+      include: {
+        product: true,
+        service: true // To get the hostname/status
+      },
+      orderBy: { createdAt: 'desc' }
+    });
+
+    return res.json(orders);
+  } catch (error) {
+    console.error("Error fetching subscriptions:", error);
+    res.status(500).json({ error: "Failed to fetch subscriptions" });
+  }
+};
+
+export const getInvoices = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const user = await prisma.user.findUnique({ where: { id: userId } });
+
+    if (!user || !user.stripeCustomerId) {
+      return res.json([]); // No customer ID = no invoices yet
+    }
+
+    // Fetch the 10 most recent invoices from Stripe
+    const invoices = await stripe.invoices.list({
+      customer: user.stripeCustomerId,
+      limit: 10,
+    });
+
+    return res.json(invoices.data);
+  } catch (error) {
+    console.error("Error fetching invoices:", error);
+    res.status(500).json({ error: "Failed to fetch invoices" });
+  }
+};
 
 /**
  * Cancels a subscription immediately.
  */
-export const cancelSubscription = async (req, res, next) => { /* ... Keep existing logic ... */ };
+export const cancelSubscription = async (req, res) => {
+  try {
+    const { subscriptionId } = req.body;
+    const userId = req.user.id;
+
+    // Verify ownership
+    const order = await prisma.order.findUnique({
+      where: { stripeSubscriptionId: subscriptionId },
+      include: { service: true }
+    });
+
+    if (!order || order.userId !== userId) {
+      return res.status(403).json({ error: "Unauthorized" });
+    }
+
+    // Cancel in Stripe (cancel_at_period_end allows them to use the rest of the month they paid for)
+    await stripe.subscriptions.update(subscriptionId, {
+      cancel_at_period_end: true,
+    });
+
+    // Update DB status
+    await prisma.order.update({
+      where: { stripeSubscriptionId: subscriptionId },
+      data: { status: 'CANCELLING' }
+    });
+
+    return res.json({ success: true, message: "Subscription will cancel at the end of the billing period." });
+  } catch (error) {
+    console.error("Cancel Error:", error);
+    res.status(500).json({ error: "Failed to cancel subscription" });
+  }
+};
+
+export const createPortalSession = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const user = await prisma.user.findUnique({ where: { id: userId } });
+
+    if (!user || !user.stripeCustomerId) {
+      return res.status(400).json({ error: "No billing account found." });
+    }
+
+    // Create the secure Stripe Portal link
+    const session = await stripe.billingPortal.sessions.create({
+      customer: user.stripeCustomerId,
+      // URL to redirect back to after they update their card
+      return_url: `${config.frontendUrl}/dashboard/billing`, 
+    });
+
+    return res.json({ url: session.url });
+  } catch (error) {
+    console.error("Portal Error:", error);
+    res.status(500).json({ error: "Failed to create portal session" });
+  }
+};
 
 export const handleWebhook = async (req, res) => {
+  console.log("🔔 WEBHOOK HIT! Receiving data from Stripe...");
   const sig = req.headers['stripe-signature'];
   let event;
 
   try {
-    // Verify the webhook signature securely
     event = stripe.webhooks.constructEvent(req.body, sig, config.stripeWebhookSecret);
+    console.log("✅ Webhook verified successfully! Event Type:", event.type);
   } catch (err) {
-    console.error("Webhook Verification Failed:", err.message);
+    console.error("❌ Webhook Verification Failed:", err.message);
     return res.status(400).send(`Webhook Error: ${err.message}`);
   }
 
-  // Handle Recurring Payment Success (Initial & Renewal)
+  let subscriptionId = null;
+  let amountPaid = 0;
+
+  // EVENT 1: Invoice Paid (Catches renewals and standard payments)
   if (event.type === 'invoice.payment_succeeded') {
     const invoice = event.data.object;
-    const subscriptionId = invoice.subscription;
+    subscriptionId = invoice.subscription;
+    amountPaid = invoice.amount_paid / 100;
 
-    // --- ADD THIS SAFEGUARD ---
-    // If this invoice isn't tied to a subscription (e.g., a one-off payment or test), ignore it safely.
     if (!subscriptionId) {
-        console.log("Ignored invoice.payment_succeeded: No subscription attached.");
+        console.log(`⚠️ Ignored invoice ${invoice.id}: No subscription attached. (Likely a stray test trigger)`);
         return res.json({ received: true });
     }
-    // --------------------------
+  }
 
+  // EVENT 2: Subscription Active (Bulletproof fallback for initial server creation)
+  if (event.type === 'customer.subscription.updated') {
+    const subscription = event.data.object;
+    // We only care when the payment clears and the status becomes 'active'
+    if (subscription.status === 'active') {
+        subscriptionId = subscription.id;
+        // Grab the price from the subscription item
+        amountPaid = subscription.items.data[0].price.unit_amount / 100;
+    }
+  }
+
+  // --- CORE PROVISIONING LOGIC ---
+  if (subscriptionId) {
     try {
-        // Now it is 100% safe to retrieve the subscription
+        // Retrieve the full subscription to ensure we have the custom metadata
         const subscription = await stripe.subscriptions.retrieve(subscriptionId);
         const meta = subscription.metadata;
 
-        // Idempotency Check: Did we already process this exact invoice?
+        // Idempotency Check: Did we already process this exact order?
+        // (This prevents building 2 servers if both events hit at the exact same time)
         const existingOrder = await prisma.order.findUnique({
             where: { stripeSubscriptionId: subscriptionId }
         });
 
         if (existingOrder) {
-            console.log(`Order for sub ${subscriptionId} already exists. Extending validity...`);
-            // It's a renewal. Extend validity based on the billing cycle.
-            // await prisma.order.update({ ... });
+            console.log(`✅ Order for sub ${subscriptionId} already exists. Ignoring duplicate webhook.`);
             return res.json({ received: true });
         }
 
         // --- FIRST TIME PROVISIONING ---
         if (meta && meta.productId) {
-            console.log(`Provisioning NEW service for user ${meta.userId}...`);
+            console.log(`🚀 Payment Cleared! Provisioning NEW service for user ${meta.userId}...`);
             
             // 1. Create DB Record securely
             const serviceEntry = await vpsService.createServiceEntry({
@@ -178,25 +311,28 @@ export const handleWebhook = async (req, res) => {
                 productId: meta.productId,
                 hostname: meta.hostname,
                 osVersionId: meta.osVersionId,
-                amount: invoice.amount_paid / 100, // Convert cents back to dollars
-                stripeSubscriptionId: subscriptionId
+                amount: amountPaid,
+                stripeSubscriptionId: subscriptionId,
+                location: meta.location
             });
+
+            console.log(`📦 Database Order & Service created (ID: ${serviceEntry.id}). Contacting Proxmox...`);
 
             // 2. Trigger Background Provisioning (Proxmox/OVH)
             vpsService.provisionNewVps(serviceEntry.id, {
                 sshKey: meta.sshKey === 'none' ? '' : meta.sshKey,
                 userPassword: meta.userPassword
             }).catch(err => {
-                console.error(`CRITICAL: Provisioning failed for service ${serviceEntry.id}:`, err);
+                console.error(`❌ CRITICAL: Provisioning failed for service ${serviceEntry.id}:`, err);
             });
 
             return res.json({ received: true, status: 'provisioning' });
         } else {
-            console.warn(`Payment succeeded but no metadata found for sub ${subscriptionId}`);
+            console.warn(`⚠️ Payment succeeded but no metadata found for sub ${subscriptionId}.`);
         }
 
     } catch (error) {
-        console.error("Webhook processing error:", error);
+        console.error("❌ Webhook processing error:", error);
         return res.status(500).json({ error: "Internal processing error" });
     }
   }

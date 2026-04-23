@@ -1,5 +1,4 @@
 import * as vpsService from '../services/vps.service.js';
-import prisma from '../services/prisma.service.js';
 
 /**
  * Get all services for the currently logged-in user.
@@ -98,5 +97,36 @@ export const rebootVps = async (req, res, next) => {
     res.status(200).json({ message: `VM ${vmid} is rebooting.`, ...result });
   } catch (error) {
     next(error);
+  }
+};
+
+export const getStats = async (req, res) => {
+  try {
+    const { vmid } = req.params;
+    // Assuming your auth middleware attaches the user ID to req.user.id
+    const userId = req.user.id; 
+
+    const stats = await vpsService.getVpsStats(vmid, userId);
+    
+    return res.status(200).json(stats);
+  } catch (error) {
+    console.error("Error fetching VPS stats:", error);
+    // If unauthorized or not found, return 403 or 404
+    return res.status(500).json({ message: error.message });
+  }
+};
+
+export const reinstallOS = async (req, res) => {
+  try {
+    const { vmid } = req.params;
+    const userId = req.user.id; 
+
+    const result = await vpsService.reinstallVps(vmid, userId);
+    
+    // Returns { newPassword: "..." }
+    return res.status(200).json(result);
+  } catch (error) {
+    console.error("Error formatting VPS:", error);
+    return res.status(500).json({ message: error.message });
   }
 };

@@ -10,17 +10,20 @@ const router = Router();
  */
 router.post('/create-subscription', isLoggedIn, billingController.createSubscription);
 
-/**
- * @route GET /api/billing/my-subscriptions
- * @desc  Fetch all active subscriptions for the user
- */
-router.get('/my-subscriptions', isLoggedIn, billingController.getMySubscriptions);
 
 /**
  * @route POST /api/billing/cancel-subscription
  * @desc  Cancel a specific subscription
  */
 router.post('/cancel-subscription', isLoggedIn, billingController.cancelSubscription);
+
+router.get('/my-subscriptions', isLoggedIn, billingController.getMySubscriptions);
+
+router.get('/invoices', isLoggedIn, billingController.getInvoices);
+
+router.post('/cancel-subscription', isLoggedIn, billingController.cancelSubscription);
+
+router.post('/portal-session', isLoggedIn, billingController.createPortalSession);
 
 /**
  * @route POST /api/billing/webhook

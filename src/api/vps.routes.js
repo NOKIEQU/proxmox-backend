@@ -5,7 +5,9 @@ import {
   stopVps,
   startVps,
   rebootVps,
-  getMyServices, // <-- Import the new function
+  getMyServices,
+  getStats,
+  reinstallOS
 } from '../controllers/vps.controller.js';
 import { isLoggedIn } from '../middlewares/auth.middleware.js';
 
@@ -20,6 +22,7 @@ router.use(isLoggedIn);
 // GET /api/vps/my-services
 // Gets all services for the logged-in user
 router.get('/my-services', getMyServices);
+
 
 // POST /api/vps/create
 // A logged-in user can create a VPS
@@ -36,5 +39,10 @@ router.post('/:vmid/start', startVps);
 // POST /api/vps/:vmid/reboot
 // A logged-in user can reboot *their own* VPS
 router.post('/:vmid/reboot', rebootVps);
+
+router.get('/:vmid/stats', getStats);
+
+router.post('/:vmid/reinstall', reinstallOS);
+
 
 export default router;
