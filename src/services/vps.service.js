@@ -145,7 +145,7 @@ export const provisionNewVps = async (serviceId, { sshKey, userPassword }) => {
     await proxmox.post(`/nodes/${NODE_NAME}/qemu/${vmid}/config`, {
       ciuser: ciUser,
       cipassword: userPassword,
-      sshkeys: sshKey,
+      sshkeys: encodeURIComponent(sshKey),
       ipconfig0: `ip=${ipRecord.ipAddress}/32,gw=${ipRecord.gateway}`,
     });
     console.log("here 10")

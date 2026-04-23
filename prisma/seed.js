@@ -1,157 +1,247 @@
-import { PrismaClient } from '../generated/prisma/index.js';
+import { PrismaClient } from '../generated/prisma/client.js';
+
 const prisma = new PrismaClient();
 
 async function main() {
-  console.log('Seeding products for AMD Epyc 7351p (16c/32t)...');
+  console.log('🌱 Starting database seed...');
 
-  // Strategy:
-  // CPU: 16 Cores / 32 Threads.
-  // With KVM virtualization, you can safely oversell vCPUs by 2x-4x for shared workload tiers.
-  // RAM: RAM cannot be oversold safely. Assuming you have ~128GB RAM.
-  // Storage: NVMe is fast, assume ~1-2TB.
-
-  const products = [
+  // ==========================================
+  // 1. SEED OPERATING SYSTEMS + VERSIONS
+  // ==========================================
+  const operatingSystems = [
     {
-      name: "VPS Starter",
-      type: "VPS",
-      description: "Perfect for personal websites, VPNs, or lightweight bots.",
-      stock: -1, // Unlimited (bounded by hardware)
-      specs: {
-        vcpus: 1,
-        ramGB: 2,
-        storageGB: 25, // Generous storage is cheap on NVMe
-        location: "UK (London)"
-      },
-      pricing: [
-          { billingCycle: 'MONTHLY', price: 3.99 },
-          { billingCycle: 'QUARTERLY', price: 10.99 }, // Small discount
-          { billingCycle: 'ANNUALLY', price: 39.99 }   // 2 months free
-      ]
+      name: 'Ubuntu',
+      type: 'linux',
+      versions: [
+        { version: '22.04 LTS', proxmoxTemplateId: 9000, cloudInitUser: 'ubuntu' },
+        { version: '24.04 LTS', proxmoxTemplateId: 9001, cloudInitUser: 'ubuntu' },
+      ],
     },
     {
-      name: "VPS Standard",
-      type: "VPS",
-      description: "Our most popular plan. Great for game servers (Minecraft/FiveM small) or web apps.",
+      name: 'Debian',
+      type: 'linux',
+      versions: [
+        { version: '12', proxmoxTemplateId: 9002, cloudInitUser: 'debian' },
+      ],
+    },
+    {
+      name: 'AlmaLinux',
+      type: 'linux',
+      versions: [
+        { version: '8', proxmoxTemplateId: 9003, cloudInitUser: 'almalinux' },
+        { version: '9', proxmoxTemplateId: 9004, cloudInitUser: 'almalinux' },
+      ],
+    },
+    {
+      name: 'Rocky Linux',
+      type: 'linux',
+      versions: [
+        { version: '8', proxmoxTemplateId: 9005, cloudInitUser: 'rocky' },
+        { version: '9', proxmoxTemplateId: 9006, cloudInitUser: 'rocky' },
+      ],
+    },
+    {
+      name: 'CentOS Stream',
+      type: 'linux',
+      versions: [
+        { version: '9', proxmoxTemplateId: 9007, cloudInitUser: 'centos' },
+        { version: '10', proxmoxTemplateId: 9008, cloudInitUser: 'centos' },
+      ],
+    },
+    {
+      name: 'Fedora',
+      type: 'linux',
+      versions: [
+        { version: '43', proxmoxTemplateId: 9009, cloudInitUser: 'fedora' },
+      ],
+    },
+    {
+      name: 'OpenSUSE',
+      type: 'linux',
+      versions: [
+        { version: '15.5', proxmoxTemplateId: 9010, cloudInitUser: 'opensuse' },
+        { version: '16', proxmoxTemplateId: 9011, cloudInitUser: 'opensuse' },
+      ],
+    },
+  ];
+
+  console.log('Loading Operating Systems and Templates...');
+  for (const os of operatingSystems) {
+    let osRecord = await prisma.operatingSystem.findFirst({
+      where: { name: os.name },
+    });
+
+    if (!osRecord) {
+      osRecord = await prisma.operatingSystem.create({
+        data: {
+          name: os.name,
+          type: os.type,
+        },
+      });
+    }
+
+    for (const osVersion of os.versions) {
+      const existingVersion = await prisma.osVersion.findFirst({
+        where: {
+          osId: osRecord.id,
+          version: osVersion.version,
+        },
+      });
+
+      if (!existingVersion) {
+        await prisma.osVersion.create({
+          data: {
+            version: osVersion.version,
+            proxmoxTemplateId: osVersion.proxmoxTemplateId,
+            cloudInitUser: osVersion.cloudInitUser,
+            osId: osRecord.id,
+          },
+        });
+      } else {
+        await prisma.osVersion.update({
+          where: { id: existingVersion.id },
+          data: {
+            proxmoxTemplateId: osVersion.proxmoxTemplateId,
+            cloudInitUser: osVersion.cloudInitUser,
+          },
+        });
+      }
+    }
+  }
+  console.log('✅ Seeded operating systems and OS templates.');
+
+  // ==========================================
+  // 2. SEED PRODUCTS (VPS PLANS)
+  // ==========================================
+  const products = [
+    {
+      name: 'Starter Cloud',
+      description: 'Perfect for small personal projects and testing.',
+      type: 'VPS',
+      stock: -1,
+      specs: {
+        vcpus: 1,
+        ramGB: 1,
+        storageGB: 25,
+      },
+      prices: [
+        { billingCycle: 'MONTHLY', price: '5.00' },
+        { billingCycle: 'QUARTERLY', price: '14.00' },
+        { billingCycle: 'ANNUALLY', price: '50.00' },
+      ],
+    },
+    {
+      name: 'Standard Cloud',
+      description: 'Ideal for hosting web apps, blogs, and standard databases.',
+      type: 'VPS',
       stock: -1,
       specs: {
         vcpus: 2,
-        ramGB: 4,
+        ramGB: 2,
         storageGB: 50,
-        location: "UK (London)"
       },
-      pricing: [
-          { billingCycle: 'MONTHLY', price: 7.99 },
-          { billingCycle: 'QUARTERLY', price: 21.99 }, 
-          { billingCycle: 'ANNUALLY', price: 79.99 }   
-      ]
+      prices: [
+        { billingCycle: 'MONTHLY', price: '10.00' },
+        { billingCycle: 'QUARTERLY', price: '28.00' },
+        { billingCycle: 'ANNUALLY', price: '100.00' },
+      ],
     },
     {
-      name: "VPS Advanced",
-      type: "VPS",
-      description: "Serious power for databases, CI/CD, or larger game servers.",
+      name: 'Professional Cloud',
+      description: 'High performance for production APIs and e-commerce.',
+      type: 'VPS',
       stock: -1,
       specs: {
         vcpus: 4,
         ramGB: 8,
         storageGB: 100,
-        location: "UK (London)"
       },
-      pricing: [
-          { billingCycle: 'MONTHLY', price: 15.99 },
-          { billingCycle: 'QUARTERLY', price: 44.99 }, 
-          { billingCycle: 'ANNUALLY', price: 159.99 }   
-      ]
+      prices: [
+        { billingCycle: 'MONTHLY', price: '20.00' },
+        { billingCycle: 'QUARTERLY', price: '56.00' },
+        { billingCycle: 'ANNUALLY', price: '200.00' },
+      ],
     },
     {
-      name: "VPS Professional",
-      type: "VPS",
-      description: "Dedicated-like performance for heavy workloads.",
+      name: 'Enterprise Cloud',
+      description: 'Massive compute power for heavy workloads and clustering.',
+      type: 'VPS',
       stock: -1,
       specs: {
         vcpus: 8,
         ramGB: 16,
-        storageGB: 200,
-        location: "UK (London)"
+        storageGB: 250,
       },
-      pricing: [
-          { billingCycle: 'MONTHLY', price: 29.99 },
-          { billingCycle: 'QUARTERLY', price: 84.99 }, 
-          { billingCycle: 'ANNUALLY', price: 299.99 }   
-      ]
+      prices: [
+        { billingCycle: 'MONTHLY', price: '40.00' },
+        { billingCycle: 'QUARTERLY', price: '112.00' },
+        { billingCycle: 'ANNUALLY', price: '400.00' },
+      ],
     }
   ];
 
-  for (const p of products) {
-    // 1. Create Product
-    const product = await prisma.product.create({ 
-        data: {
-            name: p.name,
-            type: p.type,
-            description: p.description,
-            stock: p.stock,
-            specs: p.specs
-        }
+  console.log('Loading Products...');
+  for (const product of products) {
+    let productRecord = await prisma.product.findFirst({
+      where: { name: product.name },
     });
 
-    // 2. Create Pricing options
-    for (const priceOption of p.pricing) {
-        await prisma.productPrice.create({
-            data: {
-                billingCycle: priceOption.billingCycle,
-                price: priceOption.price,
-                productId: product.id
-            }
-        });
-    }
-  }
-
-  // Also Seed Standard OS Options
-  console.log('Seeding Operating Systems...');
-  const osFamilies = [
-    {
-        name: 'Ubuntu',
-        type: 'linux',
-        imageUrl: 'https://assets.ubuntu.com/v1/29985a98-ubuntu-logo32.png',
-        versions: [
-            { version: '22.04 LTS', proxmoxTemplateId: 9000, cloudInitUser: 'ubuntu' }
-        ]
-    },
-    {
-        name: 'Debian',
-        type: 'linux',
-        imageUrl: 'https://upload.wikimedia.org/wikipedia/commons/thumb/6/66/Openlogo-debianV2.svg/1200px-Openlogo-debianV2.svg.png',
-        versions: [
-            { version: '12 (Bookworm)', proxmoxTemplateId: 9001, cloudInitUser: 'debian' }
-        ]
-    }
-  ];
-
-  for (const os of osFamilies) {
-      const createdOs = await prisma.operatingSystem.create({
-          data: {
-              name: os.name,
-              type: os.type,
-              imageUrl: os.imageUrl
-          }
+    if (!productRecord) {
+      productRecord = await prisma.product.create({
+        data: {
+          name: product.name,
+          description: product.description,
+          type: product.type,
+          stock: product.stock,
+          specs: product.specs,
+        },
       });
-      
-      for (const ver of os.versions) {
-          await prisma.osVersion.create({
-              data: {
-                  version: ver.version,
-                  proxmoxTemplateId: ver.proxmoxTemplateId,
-                  cloudInitUser: ver.cloudInitUser,
-                  osId: createdOs.id
-              }
-          });
-      }
-  }
+    } else {
+      await prisma.product.update({
+        where: { id: productRecord.id },
+        data: {
+          description: product.description,
+          type: product.type,
+          stock: product.stock,
+          specs: product.specs,
+        },
+      });
+    }
 
-  console.log('Seeding completed.');
+    for (const productPrice of product.prices) {
+      const existingPrice = await prisma.productPrice.findFirst({
+        where: {
+          productId: productRecord.id,
+          billingCycle: productPrice.billingCycle,
+        },
+      });
+
+      if (!existingPrice) {
+        await prisma.productPrice.create({
+          data: {
+            productId: productRecord.id,
+            billingCycle: productPrice.billingCycle,
+            price: productPrice.price,
+          },
+        });
+      } else {
+        await prisma.productPrice.update({
+          where: { id: existingPrice.id },
+          data: {
+            price: productPrice.price,
+          },
+        });
+      }
+    }
+  }
+  console.log(`✅ Seeded ${products.length} Products.`);
+
+  console.log('🎉 Database seeding completed successfully!');
 }
 
 main()
   .catch((e) => {
+    console.error('❌ Error while seeding database:');
     console.error(e);
     process.exit(1);
   })

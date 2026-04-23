@@ -5,6 +5,7 @@ import productRoutes from './product.routes.js';
 import osRoutes from './os.routes.js';
 import userRoutes from './user.routes.js';
 import locationRoutes from './location.routes.js';
+import adminRoutes from './admin.routes.js';
 
 const router = Router();
 
@@ -15,5 +16,6 @@ router.use('/products', productRoutes);
 router.use('/os', osRoutes);
 router.use('/users', userRoutes);
 router.use('/locations', locationRoutes);
+router.use('/admin', adminRoutes);
 
 export default router;
