@@ -107,6 +107,7 @@ export const login = async (req, res, next) => {
 };
 
 export const requestPasswordReset = async (req, res) => {
+  console.log("Received password reset request for email:", req.body.email);
   const { email } = req.body;
   const user = await prisma.user.findUnique({ where: { email } });
   
@@ -125,6 +126,47 @@ export const requestPasswordReset = async (req, res) => {
   });
 
   await emailService.sendPasswordResetCode(user.email, code);
+  console.log(`Password reset code ${code} sent to ${user.email} (expires at ${expiry.toISOString()})`);
 
   return res.json({ message: "If an account exists, a code has been sent." });
+};
+
+// Add this to src/controllers/auth.controller.js
+export const resetPassword = async (req, res, next) => {
+  console.log("Received password reset submission for email:", req.body.email);
+  try {
+    const { email, code, newPassword } = req.body;
+
+    const user = await prisma.user.findUnique({ where: { email } });
+
+    if (!user) {
+      return res.status(400).json({ message: "Invalid request." });
+    }
+
+    // 1. Check if the code matches and is not expired
+    if (user.passwordResetCode !== code) {
+      return res.status(400).json({ message: "Invalid verification code." });
+    }
+
+    if (new Date() > new Date(user.passwordResetExpiry)) {
+      return res.status(400).json({ message: "Verification code has expired. Please request a new one." });
+    }
+
+    // 2. Hash the new password
+    const hashedPassword = await bcrypt.hash(newPassword, 12);
+
+    // 3. Update the user record and clear the reset code tokens
+    await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        password: hashedPassword,
+        passwordResetCode: null,
+        passwordResetExpiry: null,
+      }
+    });
+
+    res.json({ message: "Password updated successfully." });
+  } catch (error) {
+    next(error);
+  }
 };
