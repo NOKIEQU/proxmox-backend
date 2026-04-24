@@ -5,6 +5,7 @@ import crypto from 'crypto';
 const NODE_NAME = 'snaphosting'; // Your Proxmox node name
 const BRIDGE_NAME = 'vmbr0';   // Your public bridge
 const DEFAULT_USER = 'ubuntu'; // Default CI User (fallback)
+import * as emailService from './email.service.js';
 
 /**
  * Creates the initial database entry for a service immediately after payment.
@@ -94,7 +95,6 @@ export const provisionNewVps = async (serviceId, { sshKey, userPassword }) => {
     });
 
     if (!ipRecord) throw new Error(`No available IP addresses in ${targetLocationName}.`);
-    console.log("here 5")
     // CRITICAL: Ensure the admin actually set the vMAC in the database!
     if (!ipRecord.virtualMac) {
       throw new Error(`CRITICAL SYSTEM ERROR: IP ${ipRecord.ipAddress} is marked available, but has no virtualMac in the database! Admin must set this manually via Prisma Studio.`);
@@ -108,7 +108,6 @@ export const provisionNewVps = async (serviceId, { sshKey, userPassword }) => {
     console.log(`Reserved IP: ${ipRecord.ipAddress} with pre-configured vMAC: ${vmac}`);
     console.log("here 6")
 
-    // --- Step 3: Call Proxmox API to Create VM ---
     // --- Step 3: Call Proxmox API to Create VM ---
     console.log('Finding next available VMID...');
     const nextIdResponse = await proxmox.get(`/cluster/nextid`);
@@ -170,6 +169,16 @@ export const provisionNewVps = async (serviceId, { sshKey, userPassword }) => {
       where: { id: ipRecord.id },
       data: { status: 'IN_USE' }, // No need to update vmac here, it's already there
     });
+
+    const user = await prisma.user.findUnique({ where: { id: userId } });
+    if (user) {
+      await emailService.sendServerReadyEmail(
+        user.email, 
+        hostname, 
+        ipRecord.ipAddress, 
+        userPassword
+      );
+    }
 
     console.log(`🎉 Successfully provisioned VM ${vmid} for user ${userId}`);
     return service;
@@ -321,9 +330,10 @@ export const getVpsStats = async (vmid, userId) => {
 
 /**
  * Wipes and reinstalls the VPS using its original OS template.
- * Destroys the VM, re-clones it, and generates a new root password.
+ * Destroys the VM, re-clones it, and assigns the provided SSH Key.
  */
-export const reinstallVps = async (vmid, userId) => {
+// 🚀 FIXED: Added sshKey parameter
+export const reinstallVps = async (vmid, userId, sshKey) => {
   // 1. Authorize user
   const service = await getOwnedVps(vmid, userId);
 
@@ -343,8 +353,7 @@ export const reinstallVps = async (vmid, userId) => {
   const specs = order.product.specs;
   const vmac = ipAddress.virtualMac;
 
-  // Generate a random 16-character secure password
-  const newPassword = crypto.randomBytes(8).toString('hex');
+  // 🚀 DELETED: No more random password generation
 
   try {
     // 3. Stop the VM
@@ -381,11 +390,11 @@ export const reinstallVps = async (vmid, userId) => {
       size: `${specs.storageGB}G`,
     });
 
-    // 8. Cloud-Init (Inject NEW password & old IP)
+    // 8. Cloud-Init (Inject SSH Key & old IP)
     console.log(`Setting Cloud-Init...`);
     await proxmox.post(`/nodes/${NODE_NAME}/qemu/${vmid}/config`, {
       ciuser: ciUser,
-      cipassword: newPassword,
+      sshkeys: encodeURIComponent(sshKey), // 🚀 FIXED: Injects the provided SSH key
       ipconfig0: `ip=${ipAddress.ipAddress}/32,gw=${ipAddress.gateway}`,
     });
 
@@ -393,8 +402,8 @@ export const reinstallVps = async (vmid, userId) => {
     console.log(`Starting freshly formatted VM ${vmid}...`);
     await proxmox.post(`/nodes/${NODE_NAME}/qemu/${vmid}/status/start`);
 
-    // Return the new password so the frontend can display it to the user
-    return { newPassword };
+    // 🚀 FIXED: Return a simple success message
+    return { success: true, message: "Server formatting initiated." };
 
   } catch (error) {
     console.error(`Reinstall failed for VM ${vmid}:`, error.response?.data || error.message);

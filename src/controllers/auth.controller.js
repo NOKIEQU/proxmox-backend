@@ -1,6 +1,7 @@
 import prisma from '../services/prisma.service.js';
 import bcrypt from 'bcryptjs';
 import { generateToken } from '../services/token.service.js';
+import * as emailService from '../services/email.service.js';
 
 /**
  * Register a new user
@@ -103,4 +104,27 @@ export const login = async (req, res, next) => {
   } catch (error) {
     next(error);
   }
+};
+
+export const requestPasswordReset = async (req, res) => {
+  const { email } = req.body;
+  const user = await prisma.user.findUnique({ where: { email } });
+  
+  if (!user) {
+    // Return 200 anyway to prevent email enumeration attacks
+    return res.json({ message: "If an account exists, a code has been sent." });
+  }
+
+  // Generate 6-digit code
+  const code = Math.floor(100000 + Math.random() * 900000).toString();
+  const expiry = new Date(Date.now() + 15 * 60 * 1000); // 15 minutes from now
+
+  await prisma.user.update({
+    where: { id: user.id },
+    data: { passwordResetCode: code, passwordResetExpiry: expiry }
+  });
+
+  await emailService.sendPasswordResetCode(user.email, code);
+
+  return res.json({ message: "If an account exists, a code has been sent." });
 };

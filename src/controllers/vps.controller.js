@@ -120,10 +120,16 @@ export const reinstallOS = async (req, res) => {
   try {
     const { vmid } = req.params;
     const userId = req.user.id; 
+    const { sshKey } = req.body; // 🚀 Extract the SSH key from the request
 
-    const result = await vpsService.reinstallVps(vmid, userId);
+    // 🚀 Validate that the SSH key was provided
+    if (!sshKey) {
+      return res.status(400).json({ message: "SSH Public Key is required for reinstallation." });
+    }
+
+    // 🚀 Pass the sshKey to the service
+    const result = await vpsService.reinstallVps(vmid, userId, sshKey);
     
-    // Returns { newPassword: "..." }
     return res.status(200).json(result);
   } catch (error) {
     console.error("Error formatting VPS:", error);

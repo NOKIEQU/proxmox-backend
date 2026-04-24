@@ -93,6 +93,9 @@ model User {
   /// Relations
   orders   Order[] /// A user can have many orders
   services Service[] /// A user can have many services
+
+  passwordResetCode   String?
+  passwordResetExpiry DateTime?
 }
 
 /// Your "store catalog". This is what you sell.

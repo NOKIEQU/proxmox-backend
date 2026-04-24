@@ -2,6 +2,7 @@ import { stripe } from '../services/stripe.service.js';
 import prisma from '../services/prisma.service.js';
 import config from '../config/index.js';
 import * as vpsService from '../services/vps.service.js';
+import * as emailService from '../services/email.service.js';
 
 export const createSubscription = async (req, res, next) => {
   try {
@@ -255,6 +256,12 @@ export const handleWebhook = async (req, res) => {
     amountPaid = invoice.amount_paid / 100;
 
     if (!subscriptionId) return res.json({ received: true });
+
+    const customer = await stripe.customers.retrieve(invoice.customer);
+    const invoiceUrl = invoice.hosted_invoice_url; // Stripe gives us a beautiful hosted invoice link!
+    
+    // Send it asynchronously (don't await so we don't block the webhook)
+    emailService.sendInvoiceEmail(customer.email, invoiceUrl, amountPaid, "Server Subscription").catch(console.error);
   }
 
   if (event.type === 'customer.subscription.updated') {
@@ -283,6 +290,10 @@ export const handleWebhook = async (req, res) => {
       if (meta && meta.productId) {
         console.log(`🚀 Payment Cleared! Provisioning NEW service...`);
 
+        // 🚀 NEW: Send Provisioning Started Email
+            const user = await prisma.user.findUnique({ where: { id: meta.userId } });
+            emailService.sendServerProvisioningEmail(user.email, meta.hostname).catch(console.error);
+            
         // 🚀 FIXED: Stitch the SSH key back together
         const fullSshKey = meta.sshKey1 === 'none' ? '' : (meta.sshKey1 + (meta.sshKey2 || ''));
 

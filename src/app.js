@@ -1,37 +1,25 @@
 import express from 'express';
 import cors from 'cors';
 import apiRouter from './api/index.js';
-import billingRouter from './api/billing.routes.js';
 import billingRoutes from './api/billing.routes.js';
 import errorHandler from './middlewares/errorHandler.js';
+import { initCronJobs } from './cron/billing.cron.js';
 
 const app = express();
 
-// Global Middlewares
 app.use(cors());
+initCronJobs();
 
-/**
- * STRIPE WEBHOOK REQUIREMENT:
- * The billing routes must be mounted BEFORE express.json() 
- * because Stripe needs the raw request body to verify signatures.
- */
-app.use((req, res, next) => {
-  if (req.originalUrl === '/api/billing/webhook') {
-    next();
-  } else {
-    express.json()(req, res, next); // Parses req.body for everything else!
-  }
-});
+app.use(
+  '/api/billing/webhook', 
+  express.raw({ type: 'application/json' })
+);
 
-app.use('/api/billing', billingRoutes);
-
-// Standard JSON parsing for all other routes
+// Standard JSON parsing for all OTHER routes
 app.use(express.json());
 
-// Main API Router
+app.use('/api/billing', billingRoutes);
 app.use('/api', apiRouter);
-
-// Error Handling (Must be last)
 app.use(errorHandler);
 
 export default app;
