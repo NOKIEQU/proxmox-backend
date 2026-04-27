@@ -1,3 +1,8 @@
+// src/services/proxmox.service.js
+// Small helper that creates a preconfigured Axios client for talking to Proxmox.
+// Notes to reviewers: this client intentionally relaxes TLS for development
+// (self-signed Proxmox certificates). In production you should replace that
+// behavior with a proper CA-signed certificate or OS-level trust.
 import axios from 'axios';
 import https from 'https';
 import config from '../config/index.js';

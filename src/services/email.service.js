@@ -1,3 +1,7 @@
+// src/services/email.service.js
+// Email utilities and a handful of ready-made templates used by the system.
+// These templates are intentionally verbose and branded — tweak the HTML/CSS
+// to match the project's visual identity. Transport credentials come from `.env`.
 import nodemailer from 'nodemailer';
 import config from '../config/index.js'; // Ensure you add SMTP details to your .env and config
 

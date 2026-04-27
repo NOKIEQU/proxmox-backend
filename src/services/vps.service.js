@@ -1,3 +1,8 @@
+// src/services/vps.service.js
+// VPS lifecycle orchestration: create DB entries, allocate IPs, clone templates
+// on Proxmox, configure Cloud-Init and handle rollback on failures.
+// This file performs operations that can affect billing and infrastructure,
+// so keep changes here deliberate and well-tested.
 import prisma from './prisma.service.js';
 import proxmox from './proxmox.service.js';
 import crypto from 'crypto';

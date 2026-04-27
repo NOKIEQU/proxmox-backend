@@ -1,5 +1,9 @@
+// src/config/index.js
+// Loads environment configuration and exposes a single `config` object.
+// Keep sensitive values in `.env`. Callers should treat values as read-only.
 import dotenv from 'dotenv';
 
+// Ensure `.env` is read during startup
 dotenv.config();
 
 // Load all environment variables

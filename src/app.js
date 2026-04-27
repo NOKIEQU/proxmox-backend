@@ -1,3 +1,8 @@
+// src/app.js
+// Express application setup for the public API server.
+// I keep this file intentionally small: configure middleware, mount
+// API routes and error handling, and initialize background cron jobs.
+// (If you need to run the server directly, import this and call `app.listen`.)
 import express from 'express';
 import cors from 'cors';
 import apiRouter from './api/index.js';
